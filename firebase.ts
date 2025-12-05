@@ -9,10 +9,9 @@ import {
   onSnapshot,
   CollectionReference,
   DocumentData,
-  // --- BARU: Tambahkan impor Firestore berikut ---
-  doc, 
+  doc,
   getDoc,
-  setDoc,
+  getDocs,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -20,9 +19,11 @@ import {
   signInWithEmailAndPassword,
   onAuthStateChanged,
   signOut,
+  initializeAuth, 
+  getReactNativePersistence, 
 } from "firebase/auth";
+import AsyncStorage from "@react-native-async-storage/async-storage"; 
 
-// Konfigurasi Firebase (Gunakan konfigurasi Anda yang sudah ada)
 const firebaseConfig = {
   apiKey: " ",
   authDomain: " ",
@@ -31,18 +32,13 @@ const firebaseConfig = {
   messagingSenderId: " ",
   appId: " ",
 };
-
-// Inisialisasi Firebase
 const app = initializeApp(firebaseConfig);
 
-// Firebase Auth dan Firestore
-export const auth = getAuth(app);
+export const auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(AsyncStorage) 
+});
 export const db = getFirestore(app);
-
-// Koleksi pesan
 export const messagesCollection = collection(db, "messages") as CollectionReference<DocumentData>;
-
-// Export fungsi Firebase yang sering digunakan
 export {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -53,8 +49,7 @@ export {
   query,
   orderBy,
   onSnapshot,
-  // --- BARU: Export fungsi Firestore berikut ---
-  doc,
-  getDoc,
-  setDoc,
+  doc, 
+  getDoc, 
+  getDocs,
 };
