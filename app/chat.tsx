@@ -1,262 +1,200 @@
-import React, { useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  FlatList,
-  TextInput,
-  Button,
-  StyleSheet,
-  Image,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
-import { useRouter } from "expo-router";
+import { useEffect, useState, useRef } from "react"; // DITAMBAH: import useRef
+import { View, Text, FlatList, TextInput, Button, StyleSheet, Image, Alert, TouchableOpacity, ActivityIndicator } from "react-native";
+import { auth, db } from "../firebase";
+import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp, doc, getDoc } from "firebase/firestore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-// PERBAIKAN 1: Mengganti library image picker
-import * as ImagePicker from "expo-image-picker"; // <--- Menggunakan Expo Image Picker
-
-import {
-  auth,
-  db,
-  messagesCollection,
-  addDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  doc,
-  getDoc,
-  signOut,
-} from "../firebase";
-
-// Tipe data pesan
-type MessageType = {
-  id: string;
-  text: string;
-  userId: string;
-  username: string;
-  imageUrl?: string;
-  createdAt: { seconds: number; nanoseconds: number } | null;
-};
+import * as ImagePicker from 'expo-image-picker'; 
 
 export default function Chat() {
-  const router = useRouter();
-  const currentUser = auth.currentUser;
-  const STORAGE_KEY = "CHAT_HISTORY_OFFLINE";
-
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<MessageType[]>([]);
-  const [username, setUsername] = useState("User");
-  const [uploading, setUploading] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [username, setUsername] = useState("Memuat...");
+  const [sending, setSending] = useState(false);
+  
+  // FIX ERROR: Menggunakan useRef untuk referensi FlatList
+  const flatListRef = useRef<FlatList>(null);
 
-  // Fungsi Logout tetap ada (untuk dipanggil oleh header di _layout.tsx)
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      router.replace("/");
-    } catch (error: any) {
-      Alert.alert("Error", "Gagal logout: " + error.message);
-    }
-  };
+  const currentUser = auth.currentUser;
 
-  // --- Ambil Username & Load Pesan ---
   useEffect(() => {
-    if (!currentUser) return;
-
-    // 1. Ambil Username
+    // 1. Load Username (AsyncStorage Quick Load)
     const loadUser = async () => {
-      const snap = await getDoc(doc(db, "users", currentUser.uid));
-      setUsername(snap.data()?.username || "User");
-    };
-    loadUser();
-
-    // 2. Load Pesan Lokal (Cache)
-    const loadLocalMessages = async () => {
+      if (!currentUser) return;
+      
+      let currentUsername = "User";
       try {
-        const cachedData = await AsyncStorage.getItem(STORAGE_KEY);
-        if (cachedData) {
-          const parsedData = JSON.parse(cachedData);
-          setMessages(parsedData);
+        const storedName = await AsyncStorage.getItem('userName');
+        if (storedName) {
+          currentUsername = storedName;
+        } else {
+          const snap = await getDoc(doc(db, "users", currentUser.uid));
+          currentUsername = snap.data()?.username || currentUser.email?.split('@')[0] || "User";
+          await AsyncStorage.setItem('userName', currentUsername);
         }
       } catch (e) {
-        console.log("Gagal memuat data offline:", e);
+        console.error("Gagal memuat username:", e);
       }
+      setUsername(currentUsername);
     };
-    loadLocalMessages();
 
-    // 3. Subscribe ke Firebase (Real-time)
-    const q = query(messagesCollection, orderBy("createdAt", "asc"));
+    loadUser();
 
-    const unsub = onSnapshot(q, (snapshot) => {
-      const list: MessageType[] = [];
-      snapshot.forEach((d) => {
-        list.push({
-          id: d.id,
-          ...(d.data() as Omit<MessageType, "id">),
-        });
-      });
-
-      setMessages(list);
-
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(list)).catch((err) =>
-        console.error("Gagal menyimpan backup:", err)
-      );
+    // 2. Load Messages (Firestore Listener)
+    const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
+    const unsub = onSnapshot(q, snap => {
+      setMessages(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => unsub();
-  }, [currentUser]);
+    return unsub;
+  }, [currentUser]); 
 
-  // --- Fungsi Pilih dan Kirim Gambar (Base64) ---
-  const handlePickImage = async () => {
-    if (!currentUser) return;
-
-    // 1. Meminta izin (Wajib untuk Expo)
+  // --- FUNGSI AMBIL GAMBAR (Expo Image Picker) ---
+  const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Izin Dibutuhkan', 'Kami butuh izin untuk mengakses galeri foto.');
+      Alert.alert('Izin Diperlukan', 'Izin untuk mengakses galeri diperlukan untuk mengirim gambar.');
       return;
     }
 
-    // 2. Memilih gambar (Mengganti launchImageLibrary)
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.5,
-      allowsEditing: false,
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, 
+      quality: 0.2, 
       base64: true, 
     });
 
-    if (result.canceled) return; // Expo menggunakan 'canceled'
+    if (result.canceled) return;
 
-    const asset = result.assets?.[0];
-    if (!asset?.base64) return;
+    if (result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
 
-    setUploading(true);
+      if (asset.base64 && asset.base64.length > 1500000) { 
+        Alert.alert("Error", "Ukuran gambar terlalu besar setelah kompresi!");
+        return;
+      }
 
-    try {
-      // Pastikan tipe data benar untuk Base64
-      const base64Img = `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}`;
-
-      await addDoc(messagesCollection, {
-        text: "Mengirim gambar...",
-        userId: currentUser.uid,
-        username: username,
-        imageUrl: base64Img,
-        createdAt: serverTimestamp(),
-      });
-    } catch (error: any) {
-      Alert.alert("Gagal Upload", "Gambar terlalu besar/koneksi error.");
-    } finally {
-      setUploading(false);
+      if (asset.base64) {
+        const mimeType = asset.mimeType || 'image/jpeg';
+        const imageString = `data:${mimeType};base64,${asset.base64}`;
+        
+        sendMessage("", imageString); 
+      } else {
+          Alert.alert("Error", "Gagal mendapatkan data Base64 gambar.");
+      }
     }
   };
 
-  // --- Mengirim pesan teks biasa ---
-  const sendMessage = async () => {
-    if (!message.trim() || !currentUser) return;
+  // --- FUNGSI KIRIM PESAN ---
+  const sendMessage = async (txt: string, imgBase64: string | null = null) => {
+    const textToSend = txt.trim();
+    if (!textToSend && !imgBase64) return;
+    if (!currentUser) return;
+    if (username === "Memuat...") return Alert.alert("Tunggu", "Username masih dimuat, coba lagi.");
+    
+    if (imgBase64) setSending(true);
 
     try {
-      await addDoc(messagesCollection, {
-        text: message,
+      await addDoc(collection(db, "messages"), {
+        text: textToSend,
+        imageUrl: imgBase64,
         userId: currentUser.uid,
         username: username,
         createdAt: serverTimestamp(),
-        imageUrl: null,
       });
+
       setMessage("");
-    } catch (error: any) {
-      Alert.alert("Error", "Gagal mengirim pesan: " + error.message);
+      // Otomatis scroll ke bawah setelah pesan terkirim
+      if (flatListRef.current) {
+        flatListRef.current.scrollToEnd({ animated: true });
+      }
+    } catch (error) {
+        console.error("Gagal kirim:", error);
+        Alert.alert("Gagal Kirim", "Terjadi kesalahan saat mengirim pesan.");
+    } finally {
+        setSending(false);
     }
-  };
-
-  // --- Render Item Pesan ---
-  const renderItem = ({ item }: { item: MessageType }) => {
-    const isMe = item.userId === currentUser?.uid;
-
-    return (
-      <View style={[styles.msgBox, isMe ? styles.myMsg : styles.otherMsg]}>
-        <Text style={styles.sender}>{item.username}</Text>
-        {item.imageUrl ? (
-          <Image
-            source={{ uri: item.imageUrl }}
-            style={{ width: 200, height: 150, borderRadius: 5, marginTop: 5 }}
-            resizeMode="cover"
-          />
-        ) : (
-          <Text>{item.text}</Text>
-        )}
-      </View>
-    );
   };
 
   return (
     <View style={styles.container}>
+      <Text style={{textAlign: 'center', fontWeight: 'bold', marginBottom: 5}}>Anda Login Sebagai: {username}</Text>
       <FlatList
         data={messages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={{ padding: 10 }}
+        keyExtractor={item => item.id}
+        // FIX ERROR: Menggunakan flatListRef
+        ref={flatListRef} 
+        
+        renderItem={({ item }) => {
+          const isMe = item.userId === currentUser?.uid;
+
+          return (
+            <View style={[styles.bubble, isMe ? styles.right : styles.left]}>
+              <Text style={[styles.name, { color: isMe ? '#fff' : '#000' }]}>
+                {item.username || item.userId?.substring(0, 5)}
+              </Text>
+              
+              {item.imageUrl && (
+                <Image
+                    source={{ uri: item.imageUrl }}
+                    style={{ width: 200, height: 200, borderRadius: 10, marginVertical: 5, backgroundColor: '#ddd' }}
+                    resizeMode="cover"
+                />
+              )}
+
+              {item.text ? <Text style={{color: isMe ? '#fff' : '#000'}}>{item.text}</Text> : null}
+
+              <Text style={styles.time}>
+                {item.createdAt?.toDate ? item.createdAt.toDate().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "..."}
+              </Text>
+            </View>
+          );
+        }}
+        // FIX ERROR: Memastikan scroll ke bawah saat data dimuat pertama kali
+        onContentSizeChange={() => {
+            if (flatListRef.current) {
+                flatListRef.current.scrollToEnd({ animated: true });
+            }
+        }}
+        onLayout={() => {
+            if (flatListRef.current) {
+                flatListRef.current.scrollToEnd({ animated: true });
+            }
+        }}
       />
 
       <View style={styles.inputRow}>
-        {/* Tombol Tambah Gambar */}
-        <TouchableOpacity
-          onPress={handlePickImage}
-          style={styles.imgBtn}
-          disabled={uploading}
-        >
-          {uploading ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={{ color: "white", fontWeight: "bold" }}>+</Text>
-          )}
+        <TouchableOpacity onPress={pickImage} disabled={sending} style={styles.imgBtn}>
+             <Text style={{fontSize: 24}}>📷</Text>
         </TouchableOpacity>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Ketik pesan..."
-          value={message}
-          onChangeText={setMessage}
+        <TextInput 
+            style={styles.input} 
+            value={message} 
+            onChangeText={setMessage} 
+            placeholder="Ketik pesan..." 
         />
-        <Button title="Kirim" onPress={sendMessage} />
+        
+        {sending ? (
+            <ActivityIndicator size="small" color="#007AFF" style={{marginRight: 10}}/>
+        ) : (
+            <Button 
+                title="Kirim" 
+                onPress={() => sendMessage(message)} 
+                disabled={username === "Memuat..."}
+            />
+        )}
       </View>
-      
-      {/* PERBAIKAN 2: BLOCK TOMBOL LOGOUT DI BAWAH DIHAPUS */}
-      {/* Tombol Logout sekarang hanya ada di header (diatur di _layout.tsx) */}
-
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 0 },
-  msgBox: { padding: 10, marginVertical: 6, borderRadius: 6, maxWidth: "80%" },
-  myMsg: { backgroundColor: "#cce5ff", alignSelf: "flex-end" },
-  otherMsg: { backgroundColor: "#eee", alignSelf: "flex-start" },
-  sender: { fontWeight: "bold", marginBottom: 2, fontSize: 12, color: "#555" },
-  inputRow: {
-    flexDirection: "row",
-    padding: 10,
-    borderTopWidth: 1,
-    borderColor: "#ccc",
-    alignItems: "center",
-    backgroundColor: "white",
-  },
-  input: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    marginRight: 10,
-    padding: 8,
-    borderRadius: 20,
-  },
-  imgBtn: {
-    backgroundColor: "#444",
-    width: 35,
-    height: 35,
-    borderRadius: 17.5,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 8,
-  },
+  container: { flex: 1, padding: 12, backgroundColor: '#f0f0f0' },
+  bubble: { padding: 10, borderRadius: 10, marginVertical: 5, maxWidth: "70%" },
+  left: { alignSelf: "flex-start", backgroundColor: "#fff" },
+  right: { alignSelf: "flex-end", backgroundColor: "#007AFF" },
+  name: { fontWeight: "bold", fontSize: 12, marginBottom: 2 },
+  time: { fontSize: 9, color: '#aaa', alignSelf: 'flex-end', marginTop: 5 },
+  inputRow: { flexDirection: "row", alignItems: "center", backgroundColor: '#fff', paddingVertical: 5, borderTopWidth: 1, borderColor: '#ccc' },
+  input: { flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 20, padding: 10, marginRight: 10 },
+  imgBtn: { marginRight: 10, paddingHorizontal: 5 }
 });
