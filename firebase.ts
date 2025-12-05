@@ -24,12 +24,12 @@ import {
 
 // Konfigurasi Firebase (Gunakan konfigurasi Anda yang sudah ada)
 const firebaseConfig = {
-  apiKey: "AIzaSyCcXVUOKGn2aZNQqDvPUnd4WjkfQANROto",
-  authDomain: "chatapp-41a8d.firebaseapp.com",
-  projectId: "chatapp-41a8d",
-  storageBucket: "chatapp-41a8d.firebasestorage.app",
-  messagingSenderId: "440844653740",
-  appId: "1:440844653740:web:df8fcf5e042b7bc6f03b09",
+  apiKey: " ",
+  authDomain: " ",
+  projectId: " ",
+  storageBucket: " ",
+  messagingSenderId: " ",
+  appId: " ",
 };
 
 // Inisialisasi Firebase
