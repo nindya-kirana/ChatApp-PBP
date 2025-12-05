@@ -1,22 +1,35 @@
-import { View, Text, TextInput, Button, StyleSheet, Pressable } from "react-native";
+import { View, Text, TextInput, Button, StyleSheet, Pressable, Alert } from "react-native";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { auth, createUserWithEmailAndPassword } from "../firebase";
+import { auth, createUserWithEmailAndPassword, db } from "../firebase"; 
+import { doc, setDoc } from "firebase/firestore"; 
+import AsyncStorage from "@react-native-async-storage/async-storage"; 
 
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState(""); 
   const router = useRouter();
 
   const handleRegister = async () => {
-    if (!email || !password) return alert("Isi semua field");
+    if (!email || !password || !username) return Alert.alert("Error", "Isi semua field.");
 
     try {
-      await createUserWithEmailAndPassword(auth, email, password);
-      alert("Register berhasil");
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      
+      // 1. SIMPAN USERNAME DI FIRESTORE
+      await setDoc(doc(db, "users", userCredential.user.uid), {
+        email: email,
+        username: username,
+      });
+
+      // 2. SIMPAN USERNAME DI ASYNCSTORAGE (Untuk persistensi auto-login cepat)
+      await AsyncStorage.setItem('userName', username);
+      
+      Alert.alert("Sukses", "Pendaftaran berhasil");
       router.replace("/chat");
     } catch (e: any) {
-      alert(e.message);
+      Alert.alert("Pendaftaran Gagal", e.message);
     }
   };
 
@@ -24,11 +37,21 @@ export default function Register() {
     <View style={styles.container}>
       <Text style={styles.title}>Register</Text>
 
+      {/* DITAMBAH: Input Username */}
+      <TextInput
+        style={styles.input}
+        placeholder="Username"
+        value={username}
+        onChangeText={setUsername}
+      />
+      
       <TextInput
         style={styles.input}
         placeholder="Email"
         value={email}
         onChangeText={setEmail}
+        keyboardType="email-address"
+        autoCapitalize="none"
       />
 
       <TextInput
